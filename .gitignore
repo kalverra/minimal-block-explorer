@@ -1,0 +1,6 @@
+*.secret
+.vscode/
+.env
+cover.out
+analysis/
+.DS_Store
