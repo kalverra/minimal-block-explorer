@@ -2,67 +2,77 @@ package view
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
+// NewApp starts the explorer pointed at the given chain URL and ID
 func NewApp(chainURL string, chainID uint64) (*App, error) {
 	app := &App{
 		Application: tview.NewApplication(),
 		chainURL:    chainURL,
 		chainID:     chainID,
 		fullTopView: tview.NewFlex().SetDirection(tview.FlexRow),
-		ContextView: NewContextView(chainURL, chainID),
-		MainView:    NewMainView(),
+		Context:     NewContextView(chainURL, chainID),
+		Control:     NewControlView(),
+		Main:        tview.NewFlex(),
 	}
-
-	app.ContextView.SetBorder(true)
-	app.ContextView.SetChangedFunc(func() {
+	app.Context.SetChangedFunc(func() {
 		app.Draw()
 	})
-
-	app.ControlView = tview.NewTextView().
-		SetDynamicColors(true).
-		SetRegions(true).
-		SetWordWrap(true).
-		SetWrap(true).
-		SetChangedFunc(func() {
-			app.Draw()
-		})
-	app.ControlView.SetBorder(true)
-
-	app.contextAndControlView = tview.NewFlex().
-		SetDirection(tview.FlexColumn).
-		AddItem(app.ContextView, 0, 1, false).
-		AddItem(app.ControlView, 0, 1, false)
-	app.fullTopView.AddItem(app.contextAndControlView, 0, 1, false)
-
-	app.fullView = tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(app.fullTopView, 0, 1, false).
-		AddItem(app.MainView, 0, 4, true)
-
-	app.defaultControls = ControlMapping{
+	app.Control.SetChangedFunc(func() {
+		app.Draw()
+	})
+	app.Control.defaultControls = ControlMapping{
 		NormalControls: NormalKeyControls{
 			'/': Control{
 				Key:         "/",
 				Description: "Search",
-				Fn:          Search,
+				Order:       0,
+				Fn:          app.Search,
+			},
+			'h': Control{
+				Key:         "h",
+				Description: "Home",
+				Order:       1,
+				Fn: func() {
+					client, err := ethclient.Dial(chainURL)
+					if err != nil {
+						app.UpdateContext(fmt.Sprintf("[red]Error connecting to chain at %s: %s[-]", chainURL, err.Error()))
+						return
+					}
+					app.ShowChainSummary(client)
+				},
 			},
 		},
 		SpecialControls: SpecialKeyControls{
 			tcell.KeyCtrlC: Control{
 				Key:         "Ctrl+C",
 				Description: "Quit",
-				Fn: func(app *App) error {
+				Order:       2,
+				Fn: func() {
 					app.Stop()
-					return nil
 				},
 			},
 		},
 	}
+	app.UpdateControls(nil)
+
+	// Build formatting containers
+	app.contextAndControlView = tview.NewFlex().
+		SetDirection(tview.FlexColumn).
+		AddItem(app.Context, 0, 1, false).
+		AddItem(app.Control, 0, 1, false)
+	app.fullTopView.AddItem(app.contextAndControlView, 0, 1, false)
+
+	app.fullView = tview.NewFlex().
+		SetDirection(tview.FlexRow).
+		AddItem(app.fullTopView, 0, 1, false).
+		AddItem(app.Main, 0, 4, true)
+
 	app.SetRoot(app.fullView, true)
 
 	client, err := ethclient.Dial(chainURL)
@@ -70,12 +80,7 @@ func NewApp(chainURL string, chainID uint64) (*App, error) {
 		return nil, fmt.Errorf("Error connecting to chain at %s: %s", chainURL, err.Error())
 	}
 
-	sum, err := NewChainSummary(app, client)
-	if err != nil {
-		return nil, fmt.Errorf("Error getting chain summary: %s", err.Error())
-	}
-
-	app.Update(sum)
+	app.ShowChainSummary(client)
 	return app, nil
 }
 
@@ -85,114 +90,150 @@ type App struct {
 	chainURL string
 	chainID  uint64
 
-	fullView              *tview.Flex
+	// fullView wraps the entire application
+	fullView *tview.Flex
+	// contextAndControlView holds the context and control views
 	contextAndControlView *tview.Flex
-	fullTopView           *tview.Flex
+	// fullTopView holds the contextAndControlView and any other top-level views (search)
+	fullTopView *tview.Flex
 
-	ContextView     *ContextView
-	ControlView     *tview.TextView
-	defaultControls ControlMapping
-	MainView        *MainView
-	currentView     View
+	Context *Context
+	Control *Controls
+	Main    *tview.Flex
 }
 
-func (app *App) Update(view View) {
-	if app.currentView != nil {
-		app.currentView.End()
-	}
-
-	app.currentView = view
-	app.MainView.Clear()
-	app.MainView.AddItem(view.Show(), 0, 1, false)
-	app.UpdateControls(view.Controls())
-}
-
-type ContextView struct {
+// Context is the view that displays the current context of the application, usually the chain URL and ID, but also errors and loading messages
+type Context struct {
 	*tview.TextView
 
 	permanentText string
 }
 
-func NewContextView(chainURL string, chainID uint64) *ContextView {
+func NewContextView(chainURL string, chainID uint64) *Context {
 	permanentText := fmt.Sprintf("URL: %s\nID: %d", chainURL, chainID)
-	t := tview.NewTextView().
+	view := tview.NewTextView().
 		SetText(permanentText).
 		SetDynamicColors(true).
 		SetRegions(true).
 		SetWordWrap(true).
 		SetWrap(true)
-	return &ContextView{
-		TextView:      t,
+	view.SetBorder(true)
+	return &Context{
+		TextView:      view,
 		permanentText: permanentText,
 	}
 }
 
-func (c *ContextView) AddError(errorText string) {
-	c.Clear()
-	c.SetText(fmt.Sprintf("%s\n[red]Error: %s[-]", c.permanentText, errorText))
+// Update updates the context view with the given text
+func (app *App) UpdateContext(text string) {
+	app.Context.Clear()
+	app.Context.SetText(fmt.Sprintf("%s\n%s", app.Context.permanentText, text))
 }
 
-func (c *ContextView) AddContext(contextText string) {
-	c.Clear()
-	c.SetText(fmt.Sprintf("%s\n[yellow]%s[-]", c.permanentText, contextText))
+// Add adds the given text to the context view without clearing the existing text
+func (app *App) AddContext(text string) {
+	app.Context.SetText(fmt.Sprintf("%s\n%s", app.Context.GetText(false), text))
 }
 
-type MainView struct {
-	*tview.Flex
+// ControlMapping is a mapping of controls to their key and description
+type ControlMapping struct {
+	NormalControls  NormalKeyControls
+	SpecialControls SpecialKeyControls
 }
 
-func NewMainView() *MainView {
-	return &MainView{
-		Flex: tview.NewFlex(),
+// NormalKeyControls is a mapping of a "normal" key press (rune) to a Control
+type NormalKeyControls map[rune]Control
+
+// SpecialKeyControls is a mapping of a "special" key press (e.g. CTRL+C) to a Control
+type SpecialKeyControls map[tcell.Key]Control
+
+// Control is a key press that triggers a function
+type Control struct {
+	Key         string
+	Description string
+	// Order is used to sort controls when displayed to the user. Default controls are always first
+	Order uint
+	Fn    func()
+}
+
+// Controls is the view that displays the current controls available to the user
+type Controls struct {
+	*tview.TextView
+
+	// defaultControls are the controls that are always available
+	defaultControls ControlMapping
+}
+
+func NewControlView() *Controls {
+	view := tview.NewTextView().
+		SetDynamicColors(true).
+		SetRegions(true).
+		SetWordWrap(true).
+		SetWrap(true)
+	view.SetBorder(true)
+	return &Controls{
+		TextView: view,
 	}
 }
 
-func (app *App) UpdateControls(controls ControlMapping) {
+// UpdateControls updates what controls the app can use and displays them in the control view
+func (app *App) UpdateControls(controls *ControlMapping) {
+	if controls == nil {
+		controls = &ControlMapping{}
+	}
 	if controls.NormalControls == nil {
 		controls.NormalControls = NormalKeyControls{}
 	}
 	if controls.SpecialControls == nil {
 		controls.SpecialControls = SpecialKeyControls{}
 	}
-	for key, defaultControl := range app.defaultControls.NormalControls {
-		controls.NormalControls[key] = defaultControl
+
+	var sortedControls []Control
+	for _, control := range controls.NormalControls {
+		sortedControls = append(sortedControls, control)
 	}
-	for key, defaultControl := range app.defaultControls.SpecialControls {
+	for _, control := range controls.SpecialControls {
+		sortedControls = append(sortedControls, control)
+	}
+	// Sort controls by order
+	sort.Slice(sortedControls, func(i, j int) bool {
+		return sortedControls[i].Order < sortedControls[j].Order
+	})
+
+	// Merge default controls with new controls
+	for key, defaultControl := range app.Control.defaultControls.SpecialControls {
+		sortedControls = append([]Control{defaultControl}, sortedControls...)
 		controls.SpecialControls[key] = defaultControl
 	}
+	for key, defaultControl := range app.Control.defaultControls.NormalControls {
+		sortedControls = append([]Control{defaultControl}, sortedControls...)
+		controls.NormalControls[key] = defaultControl
+	}
+
 	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyRune:
 			if control, exists := controls.NormalControls[event.Rune()]; exists {
 				if control.Fn == nil {
-					app.ContextView.AddError(fmt.Sprintf("No function for control %c", event.Rune()))
+					app.UpdateContext(fmt.Sprintf("[red]No function for control %c[-]", event.Rune()))
 					return nil
 				}
-				if err := control.Fn(app); err != nil {
-					app.ContextView.AddError(err.Error())
-					return nil
-				}
+				control.Fn()
 			}
 		default:
 			if control, exists := controls.SpecialControls[event.Key()]; exists {
 				if control.Fn == nil {
 					return nil
 				}
-				if err := control.Fn(app); err != nil {
-					app.ContextView.AddError(err.Error())
-					return nil
-				}
+				control.Fn()
 			}
 		}
 		return event
 	})
 
 	controlsText := ""
-	for _, control := range controls.NormalControls {
-		controlsText = fmt.Sprintf("%s[blue]%s[-] : %s\n", controlsText, control.Key, control.Description)
+	for _, control := range sortedControls {
+		controlsText = fmt.Sprintf("%s[blue]%s[-]: %s\n", controlsText, control.Key, control.Description)
 	}
-	for _, control := range controls.SpecialControls {
-		controlsText = fmt.Sprintf("%s[blue]%s[-] : %s\n", controlsText, control.Key, control.Description)
-	}
-	app.ControlView.SetText(controlsText)
+	app.Control.SetText(controlsText)
 }

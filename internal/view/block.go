@@ -11,57 +11,65 @@ import (
 	"github.com/rivo/tview"
 )
 
-func NewBlock(app *App, client *ethclient.Client, numberOrHash any) (*Block, error) {
-	block := &Block{
-		number: big.NewInt(0),
-		hash:   "",
-	}
+func (app *App) ShowBlock(client *ethclient.Client, numberOrHash any) {
+	app.UpdateContext("[yellow]Loading block...[-]")
+	number := big.NewInt(0)
+	hash := ""
 	switch numberOrHash := numberOrHash.(type) {
 	case int:
-		block.number.SetInt64(int64(numberOrHash))
+		number.SetInt64(int64(numberOrHash))
 	case int64:
-		block.number.SetInt64(numberOrHash)
+		number.SetInt64(numberOrHash)
 	case uint:
-		block.number.SetUint64(uint64(numberOrHash))
+		number.SetUint64(uint64(numberOrHash))
 	case uint64:
-		block.number.SetUint64(numberOrHash)
+		number.SetUint64(numberOrHash)
 	case string:
-		block.hash = numberOrHash
+		hash = numberOrHash
+	case common.Hash:
+		hash = numberOrHash.Hex()
 	default:
-		return nil, fmt.Errorf("'%v' is not a valid block number or hash", numberOrHash)
+		app.UpdateContext(fmt.Sprintf("[red]'%v' is not a valid block number or hash[-]", numberOrHash))
+		return
 	}
 
 	var (
-		ethBlock *types.Block
-		err      error
+		block *types.Block
+		err   error
 	)
-	if block.hash == "" {
-		ethBlock, err = client.BlockByNumber(context.Background(), block.number)
+	if hash == "" {
+		block, err = client.BlockByNumber(context.Background(), number)
 	} else {
-		ethBlock, err = client.BlockByHash(context.Background(), common.HexToHash(block.hash))
+		block, err = client.BlockByHash(context.Background(), common.HexToHash(hash))
 	}
-	block.Block = ethBlock
 	if err != nil {
-		return nil, fmt.Errorf("error getting block '%v': %s", numberOrHash, err.Error())
+		app.UpdateContext(fmt.Sprintf("[red]Error getting block '%v': %s[-]", numberOrHash, err.Error()))
+		return
 	}
-	return block, err
-}
+	app.UpdateContext("")
 
-type Block struct {
-	*types.Block
+	blockView := tview.NewFlex().SetDirection(tview.FlexRow)
+	blockView.SetBorder(true).SetTitle(fmt.Sprintf("Block %d | %s", number.Uint64(), block.Hash().Hex()))
+	blockView.AddItem(tview.NewTextView().SetText(fmt.Sprintf(
+		"Time: %d\nWithdrawals: %d\nGas Used: %d\nUncles: %d",
+		block.Time(), block.Withdrawals().Len(), block.GasUsed(), len(block.Uncles()))),
+		0, 1, false,
+	)
+	if block.Transactions().Len() > 0 {
+		transactions := tview.NewTable().SetBorders(true)
+		transactions.SetTitle("Transactions")
+		transactions.SetBorder(true)
+		transactions.SetSelectable(true, false)
+		transactions.SetSelectedFunc(func(row, _ int) {
+			app.ShowTransaction(client, block.Transactions()[row].Hash().Hex())
+		})
+	} else {
+		transactions := tview.NewTextView().SetText("No transactions")
+		transactions.SetBorder(true).SetTitle("Transactions")
+		blockView.AddItem(transactions, 0, 1, false)
+	}
 
-	number *big.Int
-	hash   string
-}
-
-func (b *Block) Show() tview.Primitive {
-	return tview.NewBox().SetBorder(true).SetTitle(fmt.Sprintf("Block %d | %s", b.Number().Uint64(), b.Hash().Hex()))
-}
-
-func (b *Block) Controls() ControlMapping {
-	return ControlMapping{}
-}
-
-func (b *Block) End() {
-
+	app.Main.Clear()
+	app.Main.AddItem(blockView, 0, 1, true)
+	app.UpdateControls(nil)
 }

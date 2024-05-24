@@ -13,15 +13,14 @@ import (
 	"github.com/rivo/tview"
 )
 
-func Search(app *App) error {
+func (app *App) Search() {
 	if app.fullTopView.GetItemCount() > 1 { // prevents multiple search inputs
-		return nil
+		return
 	}
 
 	searchInput := tview.NewInputField().
 		SetLabel("/ ").
 		SetFieldWidth(0)
-	searchInput.SetBorder(true).SetBackgroundColor(tcell.ColorDefault)
 
 	// Prevent the search input from capturing the '/' key
 	searchInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -40,42 +39,41 @@ func Search(app *App) error {
 
 			client, err := ethclient.Dial(app.chainURL)
 			if err != nil {
-				app.ContextView.AddError(fmt.Sprintf("Error connecting to chain at %s: %s", app.chainURL, err.Error()))
+				app.UpdateContext((fmt.Sprintf("[red]Error connecting to chain at %s: %s[-]", app.chainURL, err.Error())))
 				return
 			}
-			newView, err := searchChain(app, client, searchInput.GetText())
+			err = app.searchChain(client, searchInput.GetText())
 			if err != nil {
-				app.ContextView.AddError(err.Error())
-			} else {
-				app.Update(newView)
+				app.UpdateContext((fmt.Sprintf("[red]Error searching chain: %s[-]", err.Error())))
 			}
 		}
 	})
-	return nil
 }
 
-func searchChain(app *App, client *ethclient.Client, searchText string) (View, error) {
+func (app *App) searchChain(client *ethclient.Client, searchText string) error {
 	searchType, err := determineSearchType(searchText)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	switch searchType {
 	case BlockNumber:
 		blockNumber, err := strconv.ParseInt(searchText, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("input '%s' is not a valid block number", searchText)
+			return fmt.Errorf("input '%s' is not a valid block number", searchText)
 		}
-		return NewBlock(app, client, blockNumber)
+		app.ShowBlock(client, blockNumber)
+		return nil
 	case Hash:
 		hash := common.HexToHash(searchText)
-		block, err := client.BlockByHash(context.Background(), hash)
+		_, err := client.BlockByHash(context.Background(), hash)
 		if err == nil {
-			return NewBlock(app, client, block.Number().Uint64())
+			app.ShowBlock(client, hash)
 		}
 		// TODO: Search for transactions
+		return nil
 	}
-	return nil, fmt.Errorf("unknown search type for '%s'", searchText)
+	return fmt.Errorf("unknown search type for '%s'", searchText)
 }
 
 type SearchType string
