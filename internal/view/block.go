@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -34,8 +36,9 @@ func (app *App) ShowBlock(client *ethclient.Client, numberOrHash any) {
 	}
 
 	var (
-		block *types.Block
-		err   error
+		block    *types.Block
+		err      error
+		controls = &ControlMapping{}
 	)
 	if hash == "" {
 		block, err = client.BlockByNumber(context.Background(), number)
@@ -46,30 +49,66 @@ func (app *App) ShowBlock(client *ethclient.Client, numberOrHash any) {
 		app.UpdateContext(fmt.Sprintf("[red]Error getting block '%v': %s[-]", numberOrHash, err.Error()))
 		return
 	}
+	blockTime := time.Unix(int64(block.Time()), 0)
 	app.UpdateContext("")
 
 	blockView := tview.NewFlex().SetDirection(tview.FlexRow)
 	blockView.SetBorder(true).SetTitle(fmt.Sprintf("Block %d | %s", number.Uint64(), block.Hash().Hex()))
 	blockView.AddItem(tview.NewTextView().SetText(fmt.Sprintf(
-		"Time: %d\nWithdrawals: %d\nGas Used: %d\nUncles: %d",
-		block.Time(), block.Withdrawals().Len(), block.GasUsed(), len(block.Uncles()))),
+		"%s\nWithdrawals: %d\nGas Used: %d\nUncles: %d",
+		blockTime.String(), block.Withdrawals().Len(), block.GasUsed(), len(block.Uncles()))),
 		0, 1, false,
 	)
 	if block.Transactions().Len() > 0 {
-		transactions := tview.NewTable().SetBorders(true)
-		transactions.SetTitle("Transactions")
+		transactions := tview.NewTable().SetBorders(false)
+		transactions.SetTitle(fmt.Sprintf("%d Transactions", block.Transactions().Len()))
 		transactions.SetBorder(true)
 		transactions.SetSelectable(true, false)
-		transactions.SetSelectedFunc(func(row, _ int) {
-			app.ShowTransaction(client, block.Transactions()[row].Hash().Hex())
-		})
+		// Header
+		for i, tx := range block.Transactions() {
+			transactions.SetCell(i, 0, tview.NewTableCell(tx.Hash().Hex()).SetAlign(tview.AlignCenter))
+		}
+		blockView.AddItem(transactions, 0, 4, false)
+
+		controls.SpecialControls = SpecialKeyControls{
+			tcell.KeyUp: Control{
+				Key:         "Up",
+				Description: "Scroll up tx list",
+				Order:       0,
+				Fn: func() {
+					row, _ := transactions.GetSelection()
+					if row > 0 {
+						transactions.Select(row-1, 0)
+					}
+				},
+			},
+			tcell.KeyDown: Control{
+				Key:         "Down",
+				Description: "Scroll down tx list",
+				Order:       1,
+				Fn: func() {
+					row, _ := transactions.GetSelection()
+					if row < transactions.GetRowCount()-1 {
+						transactions.Select(row+1, 0)
+					}
+				},
+			},
+			tcell.KeyEnter: Control{
+				Key:         "Enter",
+				Description: "Show transaction",
+				Order:       2,
+				Fn: func() {
+					row, _ := transactions.GetSelection()
+					app.ShowTransaction(client, block.Transactions()[row].Hash().Hex())
+				},
+			},
+		}
 	} else {
 		transactions := tview.NewTextView().SetText("No transactions")
-		transactions.SetBorder(true).SetTitle("Transactions")
 		blockView.AddItem(transactions, 0, 1, false)
 	}
 
 	app.Main.Clear()
 	app.Main.AddItem(blockView, 0, 1, true)
-	app.UpdateControls(nil)
+	app.UpdateControls(controls)
 }

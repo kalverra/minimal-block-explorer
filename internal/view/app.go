@@ -2,6 +2,7 @@ package view
 
 import (
 	"fmt"
+	"math/big"
 	"sort"
 
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -10,7 +11,7 @@ import (
 )
 
 // NewApp starts the explorer pointed at the given chain URL and ID
-func NewApp(chainURL string, chainID uint64) (*App, error) {
+func NewApp(chainURL string, chainID *big.Int) (*App, error) {
 	app := &App{
 		Application: tview.NewApplication(),
 		chainURL:    chainURL,
@@ -88,7 +89,7 @@ type App struct {
 	*tview.Application
 
 	chainURL string
-	chainID  uint64
+	chainID  *big.Int
 
 	// fullView wraps the entire application
 	fullView *tview.Flex
@@ -109,8 +110,8 @@ type Context struct {
 	permanentText string
 }
 
-func NewContextView(chainURL string, chainID uint64) *Context {
-	permanentText := fmt.Sprintf("URL: %s\nID: %d", chainURL, chainID)
+func NewContextView(chainURL string, chainID *big.Int) *Context {
+	permanentText := fmt.Sprintf("URL: %s\nID: %d", chainURL, chainID.Uint64())
 	view := tview.NewTextView().
 		SetText(permanentText).
 		SetDynamicColors(true).

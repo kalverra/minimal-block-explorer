@@ -69,9 +69,9 @@ func (app *App) searchChain(client *ethclient.Client, searchText string) error {
 		_, err := client.BlockByHash(context.Background(), hash)
 		if err == nil {
 			app.ShowBlock(client, hash)
+		} else {
+			app.ShowTransaction(client, searchText)
 		}
-		// TODO: Search for transactions
-		return nil
 	}
 	return fmt.Errorf("unknown search type for '%s'", searchText)
 }

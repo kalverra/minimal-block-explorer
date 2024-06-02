@@ -1,0 +1,7 @@
+default = "Sepolia"
+
+[Chains.Sepolia]
+url = "https://xxx.xxx"
+
+[Chains.Local]
+url = "http://localhost:8584"
